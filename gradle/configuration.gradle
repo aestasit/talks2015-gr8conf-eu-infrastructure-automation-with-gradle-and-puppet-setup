@@ -1,0 +1,71 @@
+
+/***
+ *   _____             __ _                       _   _             
+ *  / ____|           / _(_)                     | | (_)            
+ * | |     ___  _ __ | |_ _  __ _ _   _ _ __ __ _| |_ _  ___  _ __  
+ * | |    / _ \| '_ \|  _| |/ _` | | | | '__/ _` | __| |/ _ \| '_ \ 
+ * | |___| (_) | | | | | | | (_| | |_| | | | (_| | |_| | (_) | | | |
+ *  \_____\___/|_| |_|_| |_|\__, |\__,_|_|  \__,_|\__|_|\___/|_| |_|
+ *                           __/ |                                  
+ *                          |___/
+ *                           
+ * Configuration management utilities and tasks.                         
+ *                                     
+ */
+ 
+import org.gradle.logging.StyledTextOutputFactory 
+import org.gradle.logging.StyledTextOutput
+
+
+project.ext {
+
+  // Method to load configuration.
+  getConfig = { String env ->
+    ConfigSlurper slurper = new ConfigSlurper(env)
+    Map config = slurper.parse(file("${projectDir}/src/main/config/servers.groovy").toURI().toURL())
+    // Lazy-evaluate GString templates with Closures e.g. jdbc_url = "jdbc:mysql://${->jdbc_host}:${->jdbc_port}/petclinic"
+    config.each { key, value ->
+      if (value instanceof GString) {
+        value.values.each {
+          if (Closure.class.isAssignableFrom(it.getClass())) {
+            it.resolveStrategy = Closure.DELEGATE_FIRST
+            it.delegate = config
+          }
+        }
+      }
+    }
+    return config
+  }
+
+  // Method to read default environment name.
+  getDefaultEnv = {
+    project.hasProperty('env') ? 
+      (project.env.contains(',') ? 
+        project.env.split(',')[0] : 
+        project.env) :
+      'vagrant'
+  }
+
+  // Logging service for configuration needs.
+  info = services.
+           get(StyledTextOutputFactory).
+           create("info").
+           withStyle(StyledTextOutput.Style.Info)
+
+  os = System.properties['os.name'].toLowerCase()
+  user = System.properties['user.name'].toLowerCase()
+
+  // Load default configuration.
+  config = getConfig(getDefaultEnv())
+
+}
+
+info.println("Environment is set to ${getDefaultEnv()} on ${os}") 
+
+task configurationInfo(description: 'Shows current configuration.') << {  
+  config.flatten().each { key, value ->
+    println "${key} = ${value}"
+  }
+}
+
+

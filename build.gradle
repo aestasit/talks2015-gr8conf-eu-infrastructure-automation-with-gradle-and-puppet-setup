@@ -1,0 +1,102 @@
+
+/***
+ *  _____                _     _             _             
+ * |  __ \              (_)   (_)           (_)            
+ * | |__) | __ _____   ___ ___ _  ___  _ __  _ _ __   __ _ 
+ * |  ___/ '__/ _ \ \ / / / __| |/ _ \| '_ \| | '_ \ / _` |
+ * | |   | | | (_) \ V /| \__ \ | (_) | | | | | | | | (_| |
+ * |_|   |_|  \___/ \_/ |_|___/_|\___/|_| |_|_|_| |_|\__, |
+ *                                                    __/ |
+ *                                                   |___/
+ *                                                   
+ * Main build that combines all provisioning tasks and utilities.
+ *    
+ */
+
+
+import org.apache.tools.ant.filters.*
+
+buildscript {
+  repositories { mavenCentral() } 
+  dependencies {
+    classpath 'com.aestasit.infrastructure.sshoogr:sshoogr-gradle:0.9.18'
+  }
+}
+
+
+apply plugin: 'base'
+apply plugin: 'maven'
+
+
+apply from: 'gradle/configuration.gradle'
+apply from: 'gradle/operations.gradle'
+
+repositories { 
+  mavenCentral() 
+  maven { url moduleReleaseRepositoryUrl }
+}
+ 
+
+configurations { puppet }
+dependencies { puppet 'org.backuity:puppet-module-installer_2.11:2.2.1' }
+
+
+task copyPuppetfile(type: Copy) {
+  from ( "${projectDir}/src/main/puppet" ) {
+    include 'Puppetfile'
+  }
+  into buildDir
+}
+
+                               
+task fetchPuppetModuleDependencies(type: JavaExec, dependsOn: copyPuppetfile) {
+  description = 'Fetches 3rd-party Puppet modules into build directory.'
+  workingDir  = buildDir
+  main        = 'org.backuity.puppet.ModuleInstaller'
+  classpath configurations.puppet
+  args '--dont-recurse', '--verbose'
+}
+
+
+task copyPuppetModules (type: Copy) {
+  description = "Copies local Puppet modules into build directory."
+  from "${projectDir}/src/main/puppet/modules"
+  into "${buildDir}/modules"
+  filter(FixCrLfFilter, eol: FixCrLfFilter.CrLf.newInstance("lf"))
+}
+
+
+task buildPuppetModules (type: Zip, dependsOn: [ fetchPuppetModuleDependencies, copyPuppetModules]) {
+  description = "Builds a combined archive of all Puppet modules."
+  baseName    = "puppet-modules"
+  from "${buildDir}/modules"
+}
+
+
+task build(type: Task) {
+  description = "Builds all Puppet artifacts."
+  dependsOn buildPuppetModules
+}
+
+
+artifacts {
+  archives file: buildPuppetModules.archivePath, name: "puppet-modules", builtBy: buildPuppetModules
+}
+
+
+uploadArchives {
+  dependsOn build
+  repositories {
+    mavenDeployer {
+      repository(url: moduleReleaseRepositoryUrl) { 
+        authentication(userName: moduleReleaseRepositoryUser, password: moduleReleaseRepositoryPassword) 
+      }
+    }
+  }
+}
+
+
+task wrapper(type: Wrapper) {
+  description = "Downloads Gradle Wrapper files."
+  gradleVersion = '2.2'
+}

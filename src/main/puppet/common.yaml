@@ -1,0 +1,14 @@
+---
+application::tomcat_source_url : ${deployment.tomcatSourceUrl} 
+application::app_location      : ${deployment.appLocation}
+application::vhost_name        : ${deployment.appVHost}
+application::db_host           : 
+application::db_schema_name    : petclinic
+application::db_user           : petclinic
+application::db_password       : petclinic
+database::db_root_password     : secret
+database::db_schema_name       : petclinic
+database::db_user              : petclinic
+database::db_password          : petclinic
+database::app_host             : 127.0.0.1
+

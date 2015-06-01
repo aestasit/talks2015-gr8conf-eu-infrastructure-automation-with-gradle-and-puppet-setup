@@ -1,0 +1,362 @@
+
+/***
+ *    _____ _____ _    _ 
+ *   / ____/ ____| |  | |
+ *  | (___| (___ | |__| |
+ *   \___ \\___ \|  __  |
+ *   ____) |___) | |  | |
+ *  |_____/_____/|_|  |_|
+ *                      
+ *  Operations tasks executed over SSH.   
+ *                      
+ */
+
+apply plugin: 'secureShell'
+
+sshOptions {
+  defaultUser           = sshUser 
+  defaultKeyFile        = file(sshKeyFile).exists() ? file(sshKeyFile) : null
+  trustUnknownHosts     = true
+  verbose               = true
+  execOptions {
+    verbose             = true
+    showOutput          = true
+    showCommand         = true
+    succeedOnExitStatus = 0
+    usePty              = true
+  }
+  scpOptions {
+    showProgress        = false
+    uploadToDirectory   = '/tmp'
+    postUploadCommand   = 'cp -R %from%/* %to% && rm -rf %from%'   
+  }
+}
+
+/***
+ *                             _      
+ *                            (_)     
+ *   __ _  ___ _ __   ___ _ __ _  ___ 
+ *  / _` |/ _ \ '_ \ / _ \ '__| |/ __|
+ * | (_| |  __/ | | |  __/ |  | | (__ 
+ *  \__, |\___|_| |_|\___|_|  |_|\___|
+ *   __/ |                            
+ *  |___/
+ *  
+ *                           
+ */
+
+task remoteCommand(description: 'Executes command passed through -Pcommand=<command> on remote server(s) (identified by -Penv=<environment>).', group: 'SSH Remote') << {
+  forEachServer { 
+    exec project.command
+  }
+}
+
+
+task facts(description: 'Executes facter to display collected facts on remote server(s) (identified by -Penv=<environment>).', group: 'SSH Remote') << {
+  forEachServer {
+    exec 'sudo -i facter'
+  }
+}
+
+
+task uname(description: 'Executes uname command on remote server(s) (identified by -Penv=<environment>).', group: 'SSH Remote') << {
+  forEachServer {
+    exec 'uname -a'
+  }
+}
+
+
+task whoami(description: 'Executes whoami command on remote server(s) (identified by -Penv=<environment>).', group: 'SSH Remote') << {
+  forEachServer {
+    exec 'whoami'
+  }
+}
+
+
+task path(description: 'Prints $PATH variable value from remote server(s) (identified by -Penv=<environment>).', group: 'SSH Remote') << {
+  forEachServer {
+    exec 'sudo -i echo $PATH'
+  }
+}
+
+
+task hostname(description: 'Executes hostname command on remote server(s) (identified by -Penv=<environment>).', group: 'SSH Remote') << {
+  forEachServer {
+    exec 'hostname -a'
+  }
+}
+
+
+task puppetVersion(description: 'Executes hostname command on remote server(s) (identified by -Penv=<environment>).', group: 'SSH Remote') << {
+  forEachServer {
+    exec 'sudo -i puppet --version'
+  }
+}
+
+
+task aptUpdate(description: 'Executes APT list update command on remote server(s) (identified by -Penv=<environment>).', group: 'SSH Remote') << {
+  forEachServer {
+    exec 'sudo -i apt-get -q -y update'
+  }
+}
+
+
+
+/***
+ *                       _     _             
+ *                      (_)   (_)            
+ *  _ __  _ __ _____   ___ ___ _  ___  _ __  
+ * | '_ \| '__/ _ \ \ / / / __| |/ _ \| '_ \ 
+ * | |_) | | | (_) \ V /| \__ \ | (_) | | | |
+ * | .__/|_|  \___/ \_/ |_|___/_|\___/|_| |_|
+ * | |                                       
+ * |_|                                       
+ *
+ * Tasks related to server provisioning process.  
+ *  
+ */
+
+
+configurations {
+  provision
+}
+
+
+dependencies {
+  if (!project.hasProperty('provisionVersion')) {
+    provision uploadArchives.artifacts
+  } else {
+    provision "${project.group}:puppet-modules:${provisionVersion}@zip"
+  } 
+}
+
+
+task initializeNode(description: 'Installs provisioning software (Puppet and friends) on remote server(s) (identified by -Penv=<environment>).', group: 'SSH Remote')  << {
+  forEachServerPrivileged {
+
+    // Use closest mirror for Ubuntu.
+    remoteFile('/etc/apt/sources.list').text = '''
+      deb mirror://mirrors.ubuntu.com/mirrors.txt trusty main restricted universe multiverse
+      deb mirror://mirrors.ubuntu.com/mirrors.txt trusty-updates main restricted universe multiverse
+      deb mirror://mirrors.ubuntu.com/mirrors.txt trusty-backports main restricted universe multiverse
+      deb mirror://mirrors.ubuntu.com/mirrors.txt trusty-security main restricted universe multiverse
+    '''
+
+    exec 'apt-get -q -y update'
+
+    if (fail('sudo -i puppet --version')) {
+
+      // Add Puppetlabs repository.
+      exec 'rm -rf puppetlabs-release-trusty.deb'
+      exec 'wget https://apt.puppetlabs.com/puppetlabs-release-trusty.deb'
+      exec 'dpkg -i puppetlabs-release-trusty.deb'
+
+      // Update package list and install Puppet.
+      exec 'apt-get -q -y update'
+      exec 'apt-get -q -y install puppet=3.7.5-1puppetlabs1'
+
+      // Cleanup.
+      exec 'rm -rf /etc/puppet/environments/example_env'
+
+    }
+
+    if (fail('zip')) {
+      exec 'apt-get -q -y install zip'
+    }
+
+    exec 'mkdir -p /etc/puppet'
+    exec 'touch /etc/puppet/hiera.yaml'
+
+    scp {
+      from { localFile "${projectDir}/src/main/puppet/hiera.yaml" }
+      into { remoteFile '/etc/puppet/hiera.yaml' } 
+    }        
+
+  }
+}
+
+
+task cleanPuppetCode(type: Delete) {
+  description = 'Deletes Puppet code before upload onto remote servers.'
+  delete "${buildDir}/puppet-deploy"
+}
+
+
+task fetchPuppetCode(type: Copy) {
+  description = 'Fetches Puppet modules from remote repository or local project.'
+  dependsOn cleanPuppetCode 
+  from configurations.provision
+  into "${buildDir}/puppet-deploy"
+}
+
+
+task preparePuppetCode(description: 'Prepares Puppet code for upload.', dependsOn: fetchPuppetCode) << {
+  file("${buildDir}/puppet-deploy").eachFileMatch(~/.*\.zip/) { File zipFile ->
+    ant.unzip(src: zipFile.absolutePath, dest: "${buildDir}/puppet-deploy/exploded")
+  }
+}
+
+task sanitizePuppetCode(description: 'Cleans Puppet code before upload.', dependsOn: preparePuppetCode) << {
+  file("${buildDir}/puppet-deploy/exploded").eachDir { File dir ->
+    file("${dir}/.git").deleteDir()
+    file("${dir}/tests").deleteDir()
+    file("${dir}/spec").deleteDir()
+    file("${dir}/.gemfiles").deleteDir()
+    file("${dir}/metadata.json").delete()
+    file("${dir}/.fixtures.yml").delete()
+    file("${dir}/.gitattributes").delete()
+    file("${dir}/.gitignore").delete()
+    file("${dir}/.travis.yml").delete()
+    file("${dir}/.pmtignore").delete()
+    file("${dir}/.geppetto-rc.json").delete()
+    file("${dir}/.nodeset.yml").delete()
+    file("${dir}/.sync.yml").delete()
+    file("${dir}/Gemfile").delete()
+    file("${dir}/Rakefile").delete()
+    file("${dir}/.puppet-lint.rc").delete()
+    file("${dir}/composer.json").delete()
+    file("${dir}/.project").delete()
+    file("${dir}/.rspec").delete()
+    file("${dir}/.gemspec").delete()
+  }
+  file("${buildDir}/puppet-deploy/exploded").eachFileRecurse { File file ->
+    if (file.isFile() && !file.name.startsWith('.')) {
+      def CR = String.valueOf(Character.toChars(0x0D))
+      def LF = String.valueOf(Character.toChars(0x0A))
+      file.text = file.text.replace(CR + LF, LF)
+    }
+  }
+}
+
+
+
+task prepareHieraConfiguration(description: 'Generates locally Hiera configuration for remote server(s) (identified by -Penv=<environment>).', dependsOn: cleanPuppetCode) << {
+  File hieraDir = file("${buildDir}/puppet-deploy/hieradata")
+  hieraDir.mkdirs()
+  forEachEnvironmentConfiguration { environment, config ->
+    file("${hieraDir}/${environment}.yaml").text = new groovy.text.SimpleTemplateEngine().createTemplate(file("${projectDir}/src/main/puppet/common.yaml")).make(config)
+  }
+}
+
+
+task puppetApply(description: 'Provisions remote server(s) (identified by -Penv=<environment>).', dependsOn: [ preparePuppetCode, sanitizePuppetCode, prepareHieraConfiguration ], group: 'SSH Remote') << {
+  forEachServerPrivileged {
+  
+    // Save old configuration.
+    exec 'mkdir -p /etc/puppet/backup'
+    if (ok("find /etc/puppet/ -name *.pp | grep '.*'")) {
+      exec 'zip -q -r /etc/puppet/backup/puppet-$(date "+%Y.%m.%d-%H.%M.%S").zip /etc/puppet/modules /etc/puppet/manifests /etc/puppet/hieradata'
+    }
+    
+    // Clean up old configuration.
+    exec 'rm -rf /etc/puppet/modules/*'
+    exec 'rm -rf /etc/puppet/manifests/*'
+    exec 'rm -rf /etc/puppet/hieradata/*'        
+
+    // Create all directories (if they were missing).
+    exec 'mkdir -p /etc/puppet/modules'
+    exec 'mkdir -p /etc/puppet/manifests'
+    exec 'mkdir -p /etc/puppet/hieradata'        
+  
+    // Upload Puppet code. 
+    options.verbose = false
+    scp {
+      from { localDir "${buildDir}/puppet-deploy/exploded" }
+      into { remoteDir '/etc/puppet/modules'}
+    }
+
+    // Upload Hiera configuration. 
+    scp {
+      from { localFile "${buildDir}/puppet-deploy/hieradata/${environmentName}.yaml" }
+      into { remoteFile '/etc/puppet/hieradata/common.yaml'}
+    }
+    options.verbose = true
+
+    // Create Puppet node manifest with all required classes. 
+    remoteFile('/etc/puppet/manifests/site.pp').text = """
+      node default {
+        ${serverProperties.roles.collect { "class { '${it}': }" }.join("->\n    ")}
+      }
+    """  
+    
+    // Apply Puppet configuration.
+    def puppetResult = exec(command: 'puppet apply --detailed-exitcodes --verbose --modulepath=/etc/puppet/modules /etc/puppet/manifests/site.pp', failOnError: false)
+    if (puppetResult.exitStatus != 0 && puppetResult.exitStatus != 2) {
+      throw new GradleException('Puppet failed to apply all changes!')
+    }
+    
+  }
+}
+
+
+task puppetReapply(description: 'Provisions remote server(s) (identified by -Penv=<environment>) using configuration that was previously uploaded.', group: 'SSH Remote') << {
+  forEachServerPrivileged {
+    def puppetResult = exec(command: 'puppet apply --detailed-exitcodes --verbose --modulepath=/etc/puppet/modules /etc/puppet/manifests/site.pp', failOnError: false)
+    if (puppetResult.exitCode != 0 && puppetResult.exitStatus != 2) {
+      throw new GradleException('Puppet failed to apply all changes!')
+    }
+  }
+}
+
+
+/***
+ *  _       _                        _ 
+ * (_)     | |                      | |
+ *  _ _ __ | |_ ___ _ __ _ __   __ _| |
+ * | | '_ \| __/ _ \ '__| '_ \ / _` | |
+ * | | | | | ||  __/ |  | | | | (_| | |
+ * |_|_| |_|\__\___|_|  |_| |_|\__,_|_|
+ *                                       
+ * Utility methods and building blocks used in all the tasks above.          
+ *                         
+ */
+
+def forEachEnvironmentConfiguration(Closure cl) {
+  if (project.hasProperty('env')) {
+    String[] environments = project.env.split(',')
+    environments.each { String environment ->
+      def config = getConfig(environment)      
+      cl(environment, config)
+    }
+  } else {
+    cl(project.getDefaultEnv(), config)  
+  }  
+}
+
+
+def forEachServer(Closure cl) {
+  forEachEnvironmentConfiguration { environment, environmentProperties ->
+    info.println "Environment '${environment}' has ${environmentProperties?.servers?.size() ?: 0} server(s)"
+    def serverRole = project.hasProperty('role') ? project.role : ''
+    if (serverRole) {
+      info.println "Running task for servers with role: ${serverRole}"
+    } else {
+      info.println "Running task for all servers in the environment"    
+    }
+    environmentProperties.servers.each { host, serverProperties ->
+      if (!serverRole || serverProperties.roles?.contains(serverRole)) {
+        if (serverRole) {
+          info.println "Role matched: ${host}"
+        }
+        def combinedConfing = project.properties + environmentProperties + serverProperties
+        def sshUrl = combinedConfing.sshPasswordLogin ? "${combinedConfing.sshUser}:${combinedConfing.sshPassword}@${host}:22" : "${combinedConfing.sshUser}@${host}:22"
+        project.ext.environmentName = environment
+        project.ext.serverHost = host
+        project.ext.serverProperties = serverProperties
+        remoteSession(sshUrl.toString(), cl)
+        project.ext.environmentName = null
+        project.ext.serverHost = null         
+        project.ext.serverProperties = null
+      } else {
+        info.println "Ignoring: ${host}"
+      }
+    }
+  }
+}
+
+
+def forEachServerPrivileged(Closure cl) {
+  forEachServer {
+    prefix ('sudo -i ', cl)
+  }
+}

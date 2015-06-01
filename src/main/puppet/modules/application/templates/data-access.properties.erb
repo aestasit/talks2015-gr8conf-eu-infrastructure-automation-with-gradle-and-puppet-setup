@@ -1,0 +1,12 @@
+
+jdbc.driverClassName=com.mysql.jdbc.Driver
+jdbc.url=jdbc:mysql://<%= @db_host %>:<%= @db_port %>/<%= @db_name %>
+jdbc.username=<%= @db_user %>
+jdbc.password=<%= @db_password %>
+
+jdbc.initLocation=classpath:db/mysql/initDB.txt
+jdbc.dataLocation=classpath:db/mysql/populateDB.txt
+
+hibernate.dialect=org.hibernate.dialect.MySQLDialect
+
+jpa.database=MYSQL
