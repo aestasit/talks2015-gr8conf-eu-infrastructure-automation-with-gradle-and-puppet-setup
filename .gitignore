@@ -1,3 +1,5 @@
 /repository/*.gz
 /repository/petclinic-0.1-SNAPSHOT.war
 .vagrant
+/.gradle
+build

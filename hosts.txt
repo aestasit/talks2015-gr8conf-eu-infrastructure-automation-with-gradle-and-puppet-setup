@@ -3,4 +3,5 @@
 192.168.48.20 local.database.gr8conf.org
 192.168.48.30 local.repository.gr8conf.org
 
+52.16.62.203  production.petclinic.gr8conf.org
 
